@@ -1,0 +1,22 @@
+.{
+    .name = .zgsld_greetd_bridge,
+    .version = "0.1.0",
+    .fingerprint = 0x90d318930cc2f3b0,
+    .minimum_zig_version = "0.15.2",
+    .dependencies = .{
+        .zgsld = .{ .path = "../zgsld" },
+        .clap = .{
+            .url = "https://github.com/Hejsil/zig-clap/archive/refs/tags/0.11.0.tar.gz",
+            .hash = "1220cf08a633c05eeb3b7a8317045c0f7f50d0300b9534b3e47ede19c033780ef824",
+        },
+        .toml = .{
+            .url = "git+https://github.com/sam701/zig-toml?ref=zig-0.15#475b03c630c802f8b6bd3e239d8fc2279b4fadb8",
+            .hash = "toml-0.3.0-bV14BfV7AQD8DkuQI7skP8ekQTaBYKTO0MY_35Cw_EXo",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
