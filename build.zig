@@ -1,5 +1,4 @@
 const std = @import("std");
-const zgsld_build = @import("zgsld");
 const build_zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) !void {
@@ -8,7 +7,7 @@ pub fn build(b: *std.Build) !void {
 
     const standalone = b.option(bool, "standalone", "Build standalone greeter + session manager") orelse false;
 
-    const zgsld = b.dependency("zgsld", .{ .target = target, .optimize = optimize });
+    const zgsld = b.dependency("zgsld", .{ .target = target, .optimize = optimize, .standalone = standalone });
     const clap = b.dependency("clap", .{ .target = target, .optimize = optimize });
     const toml = b.dependency("toml", .{ .target = target, .optimize = optimize });
 
@@ -18,39 +17,22 @@ pub fn build(b: *std.Build) !void {
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", version_str);
 
-    const greetd_greeter_bridge = b.createModule(.{
-        .root_source_file = b.path("src/greeter.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{},
+    const exe_name = if (standalone) "greetd" else "zgsld-greetd-bridge";
+    const exe = b.addExecutable(.{
+        .name = exe_name,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "zgsld", .module = zgsld.module("zgsld") },
+                .{ .name = "clap", .module = clap.module("clap") },
+                .{ .name = "toml", .module = toml.module("toml") },
+                .{ .name = "build_options", .module = build_options.createModule() },
+            },
+        }),
     });
-
-    const exe = blk: {
-        if (standalone) {
-            break :blk zgsld_build.makeStandalone(b,.{
-                .name = "greetd",
-                .root_module = greetd_greeter_bridge,
-                .target = target,
-                .optimize = optimize,
-            });
-        } else {
-            break :blk b.addExecutable(.{
-                .name = "zgsld-greetd-bridge",
-                .root_module = b.createModule(.{
-                    .root_source_file = b.path("src/main.zig"),
-                    .target = target,
-                    .optimize = optimize,
-                    .link_libc = true,
-                    .imports = &.{
-                        .{ .name = "zgipc", .module = zgsld.module("ipc") },
-                        .{ .name = "clap", .module = clap.module("clap") },
-                        .{ .name = "toml", .module = toml.module("toml") },
-                        .{ .name = "build_options", .module = build_options.createModule() }
-                    },
-                }),
-            });
-        }
-    };
 
     b.installArtifact(exe);
 
@@ -60,6 +42,26 @@ pub fn build(b: *std.Build) !void {
 
     const run_step = b.step("run", "Run the compat greeter");
     run_step.dependOn(&run_cmd.step);
+
+    const exe_unit_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "zgsld", .module = zgsld.module("zgsld") },
+                .{ .name = "clap", .module = clap.module("clap") },
+                .{ .name = "toml", .module = toml.module("toml") },
+                .{ .name = "build_options", .module = build_options.createModule() },
+            },
+        }),
+    });
+
+    const run_exe_unit_tests = b.addRunArtifact(exe_unit_tests);
+
+    const test_step = b.step("test", "Run unit tests");
+    test_step.dependOn(&run_exe_unit_tests.step);
 }
 
 fn getVersionStr(b: *std.Build, name: []const u8, version: std.SemanticVersion) ![]const u8 {

@@ -1,18 +1,106 @@
 const std = @import("std");
-const ipc = @import("zgipc");
+const ipc = @import("zgsld");
 const builtin = @import("builtin");
 const toml = @import("toml");
+const vt = @import("vt.zig");
 
 const native_endian = builtin.cpu.arch.endian();
+const log = std.log.scoped(.greetd_bridge);
+
+const GreetdVtOpts = enum {
+    num,
+    current,
+    next,
+    none,
+};
+
+pub const GreetdVt = union(GreetdVtOpts) {
+    num: u8,
+    current: void,
+    next: void,
+    none: void,
+};
+
+const TerminalConfig = struct {
+    vt: GreetdVt,
+    @"switch": bool = true,
+
+    pub fn tomlIntoStruct(ctx: anytype, table: *toml.Table) !@This() {
+        var result: @This() = .{
+            .vt = undefined,
+            .@"switch" = true,
+        };
+
+        try ctx.field_path.append(ctx.alloc, "vt");
+        const vt_entry = table.fetchRemove("vt") orelse {
+            _ = ctx.field_path.pop();
+            return error.MissingRequiredField;
+        };
+        defer _ = ctx.field_path.pop();
+        result.vt = try parseGreetdVt(&vt_entry.value);
+
+        if (table.fetchRemove("switch")) |entry| {
+            try ctx.field_path.append(ctx.alloc, "switch");
+            defer _ = ctx.field_path.pop();
+            result.@"switch" = switch (entry.value) {
+                .boolean => |b| b,
+                else => return error.InvalidValueType,
+            };
+        }
+
+        return result;
+    }
+};
+
+fn parseGreetdVt(value: *const toml.Value) !GreetdVt {
+    switch (value.*) {
+        .integer => |x| {
+            if (x <= 0 or x > std.math.maxInt(u8)) return error.InvalidValueType;
+            return .{ .num = @intCast(x) };
+        },
+        .string => |s| {
+            if (std.mem.eql(u8, s, "current")) return .current;
+            if (std.mem.eql(u8, s, "next")) return .next;
+            if (std.mem.eql(u8, s, "none")) return .none;
+            return error.InvalidValueType;
+        },
+        else => return error.InvalidValueType,
+    }
+}
+
+pub fn resolveVt(value: GreetdVt) !?u8 {
+    return switch (value) {
+        .num => |vt_num| vt_num,
+        .current => null,
+        .next => try vt.findNextVt(),
+        .none => null,
+    };
+}
+
+pub fn parseVtArg(value: []const u8) !GreetdVt {
+    if (std.mem.eql(u8, value, "current")) return .current;
+    if (std.mem.eql(u8, value, "next")) return .next;
+    if (std.mem.eql(u8, value, "none")) return .none;
+
+    const vt_num = try std.fmt.parseInt(u8, value, 10);
+    if (vt_num == 0) return error.InvalidValueType;
+    return .{ .num = vt_num };
+}
 
 pub const Config = struct {
     default_session: struct {
         command: []const u8,
+        user: []const u8 = "greeter",
+    },
+    initial_session: ?struct {
+        command: []const u8,
         user: []const u8,
     },
-    terminal: struct {
-        vt: u8,
-    },
+    terminal: TerminalConfig,
+    general: struct {
+        source_profile: bool = true,
+        //runfile: []const u8,
+    } = .{},
 };
 
 pub const GreetdRequestType = enum {
@@ -129,13 +217,17 @@ pub fn zgsldRequestToGreetd(ipc_event: ipc.IpcEvent) GreetdResponse {
     }
 }
 
+pub const ZgsldWriteOpts = struct {
+    source_profile: bool,
+};
+
 // GreetdRequest -> Zgsld
-pub fn writeGreetdRequestToZgsld(ipc_conn: *ipc.Ipc, greetd_req: GreetdRequest) !void {
+pub fn writeGreetdRequestToZgsld(ipc_conn: *ipc.Ipc, greetd_req: GreetdRequest, opts: ZgsldWriteOpts) !void {
     var buf: [ipc.IPC_IO_BUF_SIZE]u8 = undefined;
     var writer = ipc_conn.writer(&buf);
     var ipc_w = &writer.interface;
 
-    std.debug.print("Greeter: Sending {s}",.{ @tagName(greetd_req) });
+    log.debug("greeter sending {s}", .{@tagName(greetd_req)});
 
     switch (greetd_req) {
         .create_session => |r| {
@@ -144,7 +236,7 @@ pub fn writeGreetdRequestToZgsld(ipc_conn: *ipc.Ipc, greetd_req: GreetdRequest) 
             const ev = ipc.IpcEvent{
                 .pam_start_auth = .{ .user = user_z },
             };
-            std.debug.print("compat: pam_start_auth len={d}\n", .{user_z.len});
+            log.debug("compat pam_start_auth len={d}", .{user_z.len});
             try ipc_conn.writeEvent(ipc_w, &ev);
         },
         .post_auth_message_response => |r| {
@@ -184,8 +276,10 @@ pub fn writeGreetdRequestToZgsld(ipc_conn: *ipc.Ipc, greetd_req: GreetdRequest) 
 
             const ev = ipc.IpcEvent{
                 .start_session = .{
-                    .Command = .{
-                        .argv = argv,
+                    .session_type = .Command,
+                    .command = .{ 
+                        .argv = argv, 
+                        .source_profile = opts.source_profile 
                     },
                 },
             };
@@ -193,15 +287,15 @@ pub fn writeGreetdRequestToZgsld(ipc_conn: *ipc.Ipc, greetd_req: GreetdRequest) 
         },
     }
 
-    std.debug.print("compat: flushing {s} to zgsld fd={d}\n", .{
+    log.debug("compat flushing {s} to zgsld fd={d}", .{
         @tagName(greetd_req),
         ipc_conn.file.handle,
     });
     ipc_w.flush() catch |err| {
-        std.debug.print("compat: flush failed: {s}\n", .{@errorName(err)});
+        log.err("compat flush failed: {s}", .{@errorName(err)});
         return err;
     };
-    std.debug.print("compat: flushed {s}\n", .{@tagName(greetd_req)});
+    log.debug("compat flushed {s}", .{@tagName(greetd_req)});
 }
 
 pub fn readFrame(allocator: std.mem.Allocator, reader: *std.Io.Reader) ![]u8 {

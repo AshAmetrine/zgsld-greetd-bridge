@@ -1,29 +1,40 @@
 const std = @import("std");
-const ipc = @import("zgipc");
+const zgsld = @import("zgsld");
 const greetd = @import("greetd.zig");
 
-const log = std.log.scoped(.compat);
+const log = std.log.scoped(.greetd_bridge);
 
 pub const Greeter = struct {
     allocator: std.mem.Allocator,
-    zgsld_ipc: *ipc.Ipc,
+    zgsld_ipc: *zgsld.Ipc,
     server_fd: std.posix.fd_t,
+    source_profile: bool = true,
+    greeter_args: []const []const u8 = &[_][]const u8{},
     sock_path_buf: [std.fs.max_path_bytes]u8 = undefined,
     sock_path: []const u8 = "",
 
-    zgsld_rbuf: [ipc.IPC_IO_BUF_SIZE]u8 = undefined,
-    zgsld_event_buf: [ipc.GREETER_BUF_SIZE]u8 = undefined,
+    zgsld_rbuf: [zgsld.IPC_IO_BUF_SIZE]u8 = undefined,
+    zgsld_event_buf: [zgsld.GREETER_BUF_SIZE]u8 = undefined,
     zgsld_reader: std.fs.File.Reader = undefined,
 
-    pub fn init(allocator: std.mem.Allocator, ipc_conn: *ipc.Ipc) !Greeter {
-        std.debug.print("Greeter: init start\n",.{});
+    pub fn init(
+        allocator: std.mem.Allocator,
+        ipc_conn: *zgsld.Ipc,
+        greeter_cmd: []const u8,
+        source_profile: bool,
+    ) !Greeter {
+        log.debug("greeter init start", .{});
         const runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR") orelse return error.NoXdgRuntimeDir;
 
         var greeter: Greeter = .{
             .allocator = allocator,
             .zgsld_ipc = ipc_conn,
             .server_fd = undefined,
+            .source_profile = source_profile,
         };
+
+        greeter.greeter_args = try parseGreeterArgs(allocator, greeter_cmd);
+        errdefer freeGreeterArgs(&greeter);
 
         greeter.sock_path = try std.fmt.bufPrint(
             &greeter.sock_path_buf,
@@ -44,47 +55,22 @@ pub const Greeter = struct {
         greeter.server_fd = server_fd;
         greeter.zgsld_reader = greeter.zgsld_ipc.reader(&greeter.zgsld_rbuf);
 
-        std.debug.print("Greeter: init end\n",.{});
+        log.debug("greeter init end", .{});
 
         return greeter;
     }
 
     pub fn deinit(self: *Greeter) void {
-        std.debug.print("Greeter: deinit start\n",.{});
+        log.debug("greeter deinit start", .{});
         std.posix.close(self.server_fd);
+        freeGreeterArgs(self);
         if (self.sock_path.len != 0) std.fs.cwd().deleteFile(self.sock_path) catch {};
     }
 
-    pub fn serviceName() []const u8 {
-        return "greetd";
-    }
-
-    pub fn handleInitialArgs(allocator: std.mem.Allocator) !void {
-        _ = allocator;
-    }
-
     pub fn run(self: *Greeter) !void {
-        std.debug.print("Greeter: run start\n",.{});
-        var args = try std.process.argsAlloc(self.allocator);
-        defer std.process.argsFree(self.allocator, args);
-
-        std.debug.print("Greeter: parsing args\n",.{});
-
-        var greeter_args_list = std.ArrayList([]const u8){};
-        defer greeter_args_list.deinit(self.allocator);
-
-        if (args.len >= 2) {
-            for (args[1..]) |arg| {
-                try greeter_args_list.append(self.allocator, std.mem.sliceTo(arg, 0));
-            }
-        } else {
-            return error.MissingGreeterCommand;
-        }
-
-        if (greeter_args_list.items.len == 0) return error.MissingGreeterCommand;
-        const greeter_args = greeter_args_list.items;
-
-        std.debug.print("Greeter: args parsed\n",.{});
+        log.debug("greeter run start", .{});
+        const greeter_args = self.greeter_args;
+        if (greeter_args.len == 0) return error.MissingGreeterCommand;
 
         var env_map = try std.process.getEnvMap(self.allocator);
         defer env_map.deinit();
@@ -100,11 +86,11 @@ pub const Greeter = struct {
 
         const zgsld_io_reader = &self.zgsld_reader.interface;
         while (true) {
-            std.debug.print("Connecting...\n", .{});
+            log.debug("greeter waiting for greetd connection", .{});
             const client_fd = try std.posix.accept(self.server_fd, null, null, 0);
             defer std.posix.close(client_fd);
 
-            std.debug.print("Connected.\n",.{});
+            log.debug("greeter connected", .{});
 
             var greeter_file = std.fs.File{ .handle = client_fd };
             var greeter_rbuf: [8192]u8 = undefined;
@@ -127,10 +113,10 @@ pub const Greeter = struct {
 
                 if ((fds[0].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
                     while (true) {
-                        std.debug.print("Waiting for Greeter event\n", .{});
+                        log.debug("waiting for greetd event", .{});
                         const payload = greetd.readFrame(self.allocator, greeter_io_reader) catch |err| switch (err) {
                             error.EndOfStream => {
-                                std.debug.print("Greeter: EndOfStream\n", .{});
+                                log.debug("greeter end of stream", .{});
                                 break :poll_loop;
                             },
                             else => return err,
@@ -143,6 +129,7 @@ pub const Greeter = struct {
                             self.zgsld_ipc,
                             greeter_io_writer,
                             &greeter_state,
+                            self.source_profile,
                         ) catch |err| switch (err) {
                             error.WriteFailed => {
                                 log.err("greeter write failed", .{});
@@ -164,7 +151,7 @@ pub const Greeter = struct {
 
                 if ((fds[1].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
                     while (true) {
-                        std.debug.print("Waiting for ZGSLD event\n", .{});
+                        log.debug("waiting for zgsld event", .{});
                         const ev = self.zgsld_ipc.readEvent(zgsld_io_reader, &self.zgsld_event_buf) catch |err| switch (err) {
                             error.EndOfStream => return,
                             else => return err,
@@ -176,7 +163,7 @@ pub const Greeter = struct {
                             else => {},
                         }
 
-                        std.debug.print("ZGSLD: {s}\n", .{@tagName(ev)});
+                        log.debug("zgsld event: {s}", .{@tagName(ev)});
 
                         const resp = greetd.zgsldRequestToGreetd(ev);
                         try greetd.writeResponse(greeter_io_writer, self.allocator, resp);
@@ -186,28 +173,57 @@ pub const Greeter = struct {
                 }
 
                 if ((fds[0].revents & std.posix.POLL.ERR) != 0) {
-                    std.debug.print("Greeter poll error\n", .{});
+                    log.warn("greeter poll error", .{});
                 }
                 if ((fds[1].revents & std.posix.POLL.ERR) != 0) {
-                    std.debug.print("ZGSLD poll error\n", .{});
+                    log.warn("zgsld poll error", .{});
                 }
             }
         }
     }
 };
 
+fn parseGreeterArgs(allocator: std.mem.Allocator, command: []const u8) ![]const []const u8 {
+    var args_list = std.ArrayList([]const u8){};
+    errdefer {
+        for (args_list.items) |arg| allocator.free(arg);
+        args_list.deinit(allocator);
+    }
+
+    var it = try std.process.ArgIteratorGeneral(.{ .single_quotes = true }).init(allocator, command);
+    defer it.deinit();
+
+    while (it.next()) |arg_z| {
+        const arg = @as([]const u8, arg_z);
+        const copy = try allocator.dupe(u8, arg);
+        try args_list.append(allocator, copy);
+    }
+
+    if (args_list.items.len == 0) return error.MissingGreeterCommand;
+
+    return try args_list.toOwnedSlice(allocator);
+}
+
+fn freeGreeterArgs(self: *Greeter) void {
+    if (self.greeter_args.len == 0) return;
+    for (self.greeter_args) |arg| self.allocator.free(arg);
+    self.allocator.free(self.greeter_args);
+    self.greeter_args = &[_][]const u8{};
+}
+
 fn handleGreetdRequest(
     allocator: std.mem.Allocator,
     payload: []const u8,
-    zgsld_ipc: *ipc.Ipc,
+    zgsld_ipc: *zgsld.Ipc,
     greeter_io_writer: *std.Io.Writer,
     greeter_state: *GreeterState,
+    source_profile: bool,
 ) !void {
     var req_arena = std.heap.ArenaAllocator.init(allocator);
     defer req_arena.deinit();
     const req = try greetd.parseGreetdRequest(req_arena.allocator(), payload);
-    std.debug.print("greetd -> compat: {s}\n", .{@tagName(req)});
-    std.debug.print("greetd greeter: {s}\n", .{payload});
+    log.debug("greetd -> compat: {s}", .{@tagName(req)});
+    log.debug("greetd greeter payload: {s}", .{payload});
 
     switch (req) {
         .post_auth_message_response => {
@@ -228,9 +244,11 @@ fn handleGreetdRequest(
         },
     }
 
-    std.debug.print("compat: writing {s}\n", .{@tagName(req)});
-    try greetd.writeGreetdRequestToZgsld(zgsld_ipc, req);
-    std.debug.print("compat: wrote {s}\n", .{@tagName(req)});
+    log.debug("compat writing {s}", .{@tagName(req)});
+    try greetd.writeGreetdRequestToZgsld(zgsld_ipc, req, .{
+        .source_profile = source_profile,
+    });
+    log.debug("compat wrote {s}", .{@tagName(req)});
 }
 
 const GreeterState = struct {
