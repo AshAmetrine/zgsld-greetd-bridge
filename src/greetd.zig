@@ -115,7 +115,7 @@ pub const GreetdRequestType = enum {
 pub const GreetdRequest = union(GreetdRequestType) {
     create_session: struct { username: []const u8 },
     post_auth_message_response: struct { response: ?[]const u8 },
-    start_session: struct{ cmd: []const []const u8, env: []const []const u8 },
+    start_session: struct { cmd: []const []const u8, env: []const []const u8 },
     cancel_session: void,
 };
 
@@ -125,17 +125,12 @@ pub const GreetdResponseType = enum {
     auth_message,
 };
 
-pub const ErrorType = error {
+pub const ErrorType = error{
     AuthError,
     Error,
 };
 
-pub const AuthMessageType = enum {
-    visible,
-    secret,
-    info,
-    err
-};
+pub const AuthMessageType = enum { visible, secret, info, err };
 
 pub const GreetdResponse = union(GreetdResponseType) {
     success: void,
@@ -152,7 +147,7 @@ pub fn parseConfig(allocator: std.mem.Allocator, config_path: []const u8) !toml.
 
 pub fn parseGreetdRequest(arena: std.mem.Allocator, payload: []const u8) !GreetdRequest {
     const RequestEnvelope = struct {
-        @"type": GreetdRequestType,
+        type: GreetdRequestType,
         username: ?[]const u8 = null,
         response: ?[]const u8 = null,
         cmd: ?[]const []const u8 = null,
@@ -166,7 +161,7 @@ pub fn parseGreetdRequest(arena: std.mem.Allocator, payload: []const u8) !Greetd
         else => return error.InvalidPayload,
     };
 
-    switch (req.@"type") {
+    switch (req.type) {
         .create_session => {
             const username = req.username orelse return error.InvalidPayload;
             return .{ .create_session = .{ .username = username } };
@@ -189,16 +184,16 @@ pub fn zgsldRequestToGreetd(ipc_event: ipc.IpcEvent) GreetdResponse {
     switch (ipc_event) {
         .pam_request => |r| {
             const msg_type: AuthMessageType = if (r.echo) .visible else .secret;
-            return .{ 
-                .auth_message = .{ 
-                    .auth_message = r.message, 
-                    .auth_message_type = msg_type, 
-                }, 
+            return .{
+                .auth_message = .{
+                    .auth_message = r.message,
+                    .auth_message_type = msg_type,
+                },
             };
         },
-        .pam_message => |m| { 
+        .pam_message => |m| {
             const msg_type: AuthMessageType = if (m.is_error) .err else .info;
-            return .{ 
+            return .{
                 .auth_message = .{
                     .auth_message = m.message,
                     .auth_message_type = msg_type,
@@ -208,11 +203,11 @@ pub fn zgsldRequestToGreetd(ipc_event: ipc.IpcEvent) GreetdResponse {
         .pam_auth_result => |r| {
             if (r.ok) return .success;
 
-            return .{ 
-                .err = .{ 
+            return .{
+                .err = .{
                     .description = "authentication failed",
                     .error_type = error.AuthError,
-                }, 
+                },
             };
         },
         else => unreachable,
@@ -251,7 +246,7 @@ pub fn writeGreetdRequestToZgsld(ipc_conn: *ipc.Ipc, greetd_req: GreetdRequest, 
             const ev = ipc.IpcEvent{ .login_cancel = {} };
             try ipc_conn.writeEvent(ipc_w, &ev);
         },
-        .start_session => |r| { 
+        .start_session => |r| {
             for (r.env) |kv| {
                 const eq = std.mem.indexOfScalar(u8, kv, '=') orelse continue;
                 if (eq == 0) continue;
@@ -278,10 +273,7 @@ pub fn writeGreetdRequestToZgsld(ipc_conn: *ipc.Ipc, greetd_req: GreetdRequest, 
             const ev = ipc.IpcEvent{
                 .start_session = .{
                     .session_type = .Command,
-                    .command = .{ 
-                        .session_cmd = cmd_str,
-                        .source_profile = opts.source_profile 
-                    },
+                    .command = .{ .session_cmd = cmd_str, .source_profile = opts.source_profile },
                 },
             };
             try ipc_conn.writeEvent(ipc_w, &ev);

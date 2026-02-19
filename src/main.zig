@@ -16,8 +16,8 @@ pub fn main() !void {
 
         var config = try parseArgs(allocator, argv);
         defer config.deinit();
-        
-        std.debug.print("Error: This greeter should be run by zgsld\n",.{});
+
+        std.debug.print("Error: This greeter should be run by zgsld\n", .{});
 
         return;
     }
@@ -63,7 +63,6 @@ pub fn run(ctx: zgsld.GreeterContext) !void {
     try greeter.run();
 }
 
-
 const ParsedArgs = if (build_options.standalone) struct {
     arena: std.heap.ArenaAllocator,
     vt: ?u8 = null,
@@ -73,7 +72,7 @@ const ParsedArgs = if (build_options.standalone) struct {
     greeter_cmd: []const u8,
     source_profile: bool = true,
 
-    pub fn deinit(self: *ParsedArgs) void { 
+    pub fn deinit(self: *ParsedArgs) void {
         self.arena.deinit();
     }
 } else struct {
@@ -81,7 +80,7 @@ const ParsedArgs = if (build_options.standalone) struct {
     greeter_cmd: []const u8,
     source_profile: bool = true,
 
-    pub fn deinit(self: *ParsedArgs) void { 
+    pub fn deinit(self: *ParsedArgs) void {
         self.arena.deinit();
     }
 };
@@ -93,7 +92,6 @@ fn parseArgs(allocator: std.mem.Allocator, argv: []const [:0]const u8) !ParsedAr
         \\-v, --version             Shows the version of zgsld-greetd-bridge.
         \\-c, --config <str>        Config file to use.
         \\--vt <str>                Sets the VT ("current"|"next"|"none"|number).
-
         ;
     } else blk: {
         break :blk 
