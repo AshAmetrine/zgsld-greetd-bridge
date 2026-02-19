@@ -1,5 +1,5 @@
 const std = @import("std");
-const ipc = @import("zgsld");
+const ipc = @import("zgsld").ipc;
 const builtin = @import("builtin");
 const toml = @import("toml");
 const vt = @import("vt.zig");
@@ -91,6 +91,7 @@ pub const Config = struct {
     default_session: struct {
         command: []const u8,
         user: []const u8 = "greeter",
+        service: []const u8 = "greetd-greeter",
     },
     initial_session: ?struct {
         command: []const u8,
@@ -100,6 +101,7 @@ pub const Config = struct {
     general: struct {
         source_profile: bool = true,
         //runfile: []const u8,
+        service: []const u8 = "greetd",
     } = .{},
 };
 
@@ -246,7 +248,7 @@ pub fn writeGreetdRequestToZgsld(ipc_conn: *ipc.Ipc, greetd_req: GreetdRequest, 
             try ipc_conn.writeEvent(ipc_w, &ev);
         },
         .cancel_session => {
-            const ev = ipc.IpcEvent{ .pam_cancel = {} };
+            const ev = ipc.IpcEvent{ .login_cancel = {} };
             try ipc_conn.writeEvent(ipc_w, &ev);
         },
         .start_session => |r| { 
@@ -263,22 +265,21 @@ pub fn writeGreetdRequestToZgsld(ipc_conn: *ipc.Ipc, greetd_req: GreetdRequest, 
                 try ipc_conn.writeEvent(ipc_w, &ev);
             }
 
-            var argv_buf: [ipc.IPC_IO_BUF_SIZE]u8 = undefined;
-            var fbs = std.io.fixedBufferStream(&argv_buf);
-            const argv_writer = fbs.writer();
-            for (r.cmd) |arg| {
-                try argv_writer.writeAll(arg);
-                try argv_writer.writeByte(0);
+            var cmd_buf: [ipc.IPC_IO_BUF_SIZE]u8 = undefined;
+            var cmd_writer: std.Io.Writer = .fixed(&cmd_buf);
+            for (r.cmd, 0..) |arg, i| {
+                if (i != 0) try cmd_writer.writeByte(' ');
+                try cmd_writer.writeAll(arg);
             }
 
-            const argv = fbs.getWritten();
-            if (argv.len == 0) return error.InvalidPayload;
+            const cmd_str = cmd_writer.buffered();
+            if (cmd_str.len == 0) return error.InvalidPayload;
 
             const ev = ipc.IpcEvent{
                 .start_session = .{
                     .session_type = .Command,
                     .command = .{ 
-                        .argv = argv, 
+                        .session_cmd = cmd_str,
                         .source_profile = opts.source_profile 
                     },
                 },
@@ -287,15 +288,10 @@ pub fn writeGreetdRequestToZgsld(ipc_conn: *ipc.Ipc, greetd_req: GreetdRequest, 
         },
     }
 
-    log.debug("compat flushing {s} to zgsld fd={d}", .{
-        @tagName(greetd_req),
-        ipc_conn.file.handle,
-    });
     ipc_w.flush() catch |err| {
         log.err("compat flush failed: {s}", .{@errorName(err)});
         return err;
     };
-    log.debug("compat flushed {s}", .{@tagName(greetd_req)});
 }
 
 pub fn readFrame(allocator: std.mem.Allocator, reader: *std.Io.Reader) ![]u8 {

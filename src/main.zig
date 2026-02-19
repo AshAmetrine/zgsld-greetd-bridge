@@ -5,8 +5,25 @@ const clap = @import("clap");
 const build_options = @import("build_options");
 const greetd = @import("greetd.zig");
 
+pub const std_options: std.Options = .{ .logFn = zgsld.logFn };
+
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
+
+    if (!build_options.standalone and std.posix.getenv("ZGSLD_SOCK") == null) {
+        const argv = try std.process.argsAlloc(allocator);
+        defer std.process.argsFree(allocator, argv);
+
+        var config = try parseArgs(allocator, argv);
+        defer config.deinit();
+        
+        std.debug.print("Error: This greeter should be run by zgsld\n",.{});
+
+        return;
+    }
+
+    zgsld.initZgsldLog();
+
     const app = zgsld.Zgsld.init(allocator, .{
         .run = run,
         .configure = configure,
@@ -16,98 +33,129 @@ pub fn main() !void {
 }
 
 pub fn configure(ctx: zgsld.ConfigureContext) !void {
-    const params = comptime clap.parseParamsComptime(
-        \\-h, --help                Shows all commands.
-        \\-v, --version             Shows the version of basic-greeter.
-        \\-c, --config <str>        Config file to use.
-        \\--vt <str>                Sets the VT ("current"|"next"|"none"|number).
-    );
+    if (!build_options.standalone) unreachable;
 
-    var diag = clap.Diagnostic{};
-    var res = clap.parse(clap.Help, &params, clap.parsers.default, .{ .diagnostic = &diag, .allocator = ctx.allocator }) catch |err| {
-        try diag.reportToFile(.stderr(), err);
-        return err;
-    };
-    defer res.deinit();
+    const argv = try std.process.argsAlloc(ctx.allocator);
+    defer std.process.argsFree(ctx.allocator, argv);
 
-    if (res.args.help != 0) {
-        try clap.helpToFile(.stderr(), clap.Help, &params, .{});
-        std.process.exit(0);
-    }
-
-    if (res.args.version != 0) {
-        var stderr_buf: [1024]u8 = undefined;
-        var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
-        const stderr = &stderr_writer.interface;
-
-        try stderr.writeAll("Zgsld Greetd Bridge version " ++ build_options.version ++ "\n");
-        try stderr.flush();
-        std.process.exit(0);
-    }
-
-    if (res.args.vt) |vt_arg| {
-        const vt_selection = try greetd.parseVtArg(vt_arg);
-        if (try greetd.resolveVt(vt_selection)) |vt_num| {
-            ctx.cfg.setVt(vt_num);
-        }
-    }
-
-    const config_path = res.args.config orelse "/etc/greetd/config.toml";
-
-    const config = try greetd.parseConfig(ctx.allocator, config_path);
+    var config = try parseArgs(ctx.allocator, argv);
     defer config.deinit();
 
-    try ctx.cfg.setGreeterUser(config.value.default_session.user);
-    try ctx.cfg.setServiceName("greetd");
-    if (res.args.vt == null) {
-        if (try greetd.resolveVt(config.value.terminal.vt)) |vt| {
-            ctx.cfg.setVt(vt);
-        }
-    }
+    if (config.vt) |vt| ctx.cfg.setVt(vt);
+    if (config.greeter_user) |u| try ctx.cfg.setGreeterUser(u);
+    if (config.pam_user_service) |p| try ctx.cfg.setServiceName(p);
 }
 
 pub fn run(ctx: zgsld.GreeterContext) !void {
-    const params = comptime clap.parseParamsComptime(
-        \\-h, --help                Shows all commands.
-        \\-v, --version             Shows the version of basic-greeter.
-        \\-c, --config <str>        Config file to use.
-    );
+    const argv = try std.process.argsAlloc(ctx.allocator);
+    defer std.process.argsFree(ctx.allocator, argv);
 
-    var diag = clap.Diagnostic{};
-    var res = clap.parse(clap.Help, &params, clap.parsers.default, .{ .diagnostic = &diag, .allocator = ctx.allocator }) catch |err| {
-        try diag.reportToFile(.stderr(), err);
-        return err;
-    };
-    defer res.deinit();
-
-    if (res.args.help != 0) {
-        try clap.helpToFile(.stderr(), clap.Help, &params, .{});
-        std.process.exit(0);
-    }
-
-    if (res.args.version != 0) {
-        var stderr_buf: [1024]u8 = undefined;
-        var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
-        const stderr = &stderr_writer.interface;
-
-        try stderr.writeAll("Zgsld Greetd Bridge version " ++ build_options.version ++ "\n");
-        try stderr.flush();
-        std.process.exit(0);
-    }
-
-    const config_path = res.args.config orelse "/etc/greetd/config.toml";
-
-    const config = try greetd.parseConfig(ctx.allocator, config_path);
+    var config = try parseArgs(ctx.allocator, argv);
     defer config.deinit();
-
-    const greeter_cmd = config.value.default_session.command;
 
     var greeter = try Greeter.init(
         ctx.allocator,
         ctx.ipc,
-        greeter_cmd,
-        config.value.general.source_profile,
+        config.greeter_cmd,
+        config.source_profile,
     );
     defer greeter.deinit();
     try greeter.run();
+}
+
+
+const ParsedArgs = if (build_options.standalone) struct {
+    arena: std.heap.ArenaAllocator,
+    vt: ?u8 = null,
+    greeter_user: ?[]const u8 = null,
+    pam_user_service: ?[]const u8 = null,
+    pam_greeter_service: ?[]const u8 = null,
+    greeter_cmd: []const u8,
+    source_profile: bool = true,
+
+    pub fn deinit(self: *ParsedArgs) void { 
+        self.arena.deinit();
+    }
+} else struct {
+    arena: std.heap.ArenaAllocator,
+    greeter_cmd: []const u8,
+    source_profile: bool = true,
+
+    pub fn deinit(self: *ParsedArgs) void { 
+        self.arena.deinit();
+    }
+};
+
+fn parseArgs(allocator: std.mem.Allocator, argv: []const [:0]const u8) !ParsedArgs {
+    const param_str = if (build_options.standalone) blk: {
+        break :blk 
+        \\-h, --help                Shows all commands.
+        \\-v, --version             Shows the version of zgsld-greetd-bridge.
+        \\-c, --config <str>        Config file to use.
+        \\--vt <str>                Sets the VT ("current"|"next"|"none"|number).
+
+        ;
+    } else blk: {
+        break :blk 
+        \\-h, --help                Shows all commands.
+        \\-v, --version             Shows the version of zgsld-greetd-bridge.
+        \\-c, --config <str>        Config file to use.
+        ;
+    };
+
+    const params = comptime clap.parseParamsComptime(param_str);
+    var diag = clap.Diagnostic{};
+    var iter = clap.args.SliceIterator{ .args = argv[1..] };
+    var res = clap.parseEx(clap.Help, &params, clap.parsers.default, &iter, .{
+        .diagnostic = &diag,
+        .allocator = allocator,
+    }) catch |err| {
+        diag.reportToFile(.stderr(), err) catch {};
+        return err;
+    };
+    defer res.deinit();
+
+    if (res.args.help != 0) {
+        try clap.helpToFile(.stderr(), clap.Help, &params, .{});
+        std.process.exit(0);
+    }
+
+    if (res.args.version != 0) {
+        var stderr_buf: [1024]u8 = undefined;
+        var stderr_writer = std.fs.File.stderr().writer(&stderr_buf);
+        const stderr = &stderr_writer.interface;
+
+        try stderr.writeAll("zgsld-greetd-bridge version " ++ build_options.version ++ "\n");
+        try stderr.flush();
+        std.process.exit(0);
+    }
+
+    const config_path = res.args.config orelse "/etc/greetd/config.toml";
+    const config = try greetd.parseConfig(allocator, config_path);
+
+    const greeter_session = config.value.default_session;
+
+    if (build_options.standalone) {
+        const vt_selection = if (res.args.vt) |vt| blk: {
+            break :blk try greetd.parseVtArg(vt);
+        } else config.value.terminal.vt;
+
+        const vt = try greetd.resolveVt(vt_selection);
+
+        return .{
+            .arena = config.arena,
+            .vt = vt,
+            .greeter_user = greeter_session.user,
+            .pam_user_service = config.value.general.service,
+            .pam_greeter_service = config.value.default_session.service,
+            .greeter_cmd = greeter_session.command,
+            .source_profile = config.value.general.source_profile,
+        };
+    }
+
+    return .{
+        .arena = config.arena,
+        .greeter_cmd = greeter_session.command,
+        .source_profile = config.value.general.source_profile,
+    };
 }

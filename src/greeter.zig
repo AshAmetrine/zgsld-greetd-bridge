@@ -1,25 +1,29 @@
 const std = @import("std");
 const zgsld = @import("zgsld");
+const zgipc = zgsld.ipc;
 const greetd = @import("greetd.zig");
 
 const log = std.log.scoped(.greetd_bridge);
 
+var shutdown_requested = std.atomic.Value(u8).init(0);
+var active_child_pid = std.atomic.Value(std.posix.pid_t).init(0);
+
 pub const Greeter = struct {
     allocator: std.mem.Allocator,
-    zgsld_ipc: *zgsld.Ipc,
+    zgsld_ipc: *zgipc.Ipc,
     server_fd: std.posix.fd_t,
     source_profile: bool = true,
     greeter_args: []const []const u8 = &[_][]const u8{},
     sock_path_buf: [std.fs.max_path_bytes]u8 = undefined,
     sock_path: []const u8 = "",
 
-    zgsld_rbuf: [zgsld.IPC_IO_BUF_SIZE]u8 = undefined,
-    zgsld_event_buf: [zgsld.GREETER_BUF_SIZE]u8 = undefined,
+    zgsld_rbuf: [zgipc.IPC_IO_BUF_SIZE]u8 = undefined,
+    zgsld_event_buf: [zgipc.GREETER_BUF_SIZE]u8 = undefined,
     zgsld_reader: std.fs.File.Reader = undefined,
 
     pub fn init(
         allocator: std.mem.Allocator,
-        ipc_conn: *zgsld.Ipc,
+        ipc_conn: *zgipc.Ipc,
         greeter_cmd: []const u8,
         source_profile: bool,
     ) !Greeter {
@@ -72,6 +76,8 @@ pub const Greeter = struct {
         const greeter_args = self.greeter_args;
         if (greeter_args.len == 0) return error.MissingGreeterCommand;
 
+        installSignalHandlers();
+
         var env_map = try std.process.getEnvMap(self.allocator);
         defer env_map.deinit();
         try env_map.put("GREETD_SOCK", self.sock_path);
@@ -82,12 +88,30 @@ pub const Greeter = struct {
         child.stdout_behavior = .Inherit;
         child.stderr_behavior = .Inherit;
         try child.spawn();
-        defer _ = child.wait() catch {};
+        active_child_pid.store(child.id, .seq_cst);
+        defer active_child_pid.store(0, .seq_cst);
+        if (shutdown_requested.load(.seq_cst) != 0) {
+            std.posix.kill(child.id, std.posix.SIG.TERM) catch {};
+        }
+        var child_exited = false;
+        defer {
+            if (!child_exited) _ = child.wait() catch {};
+        }
 
         const zgsld_io_reader = &self.zgsld_reader.interface;
         while (true) {
+            if (shutdown_requested.load(.seq_cst) != 0) {
+                shutdownChild(&child, &child_exited);
+                return;
+            }
             log.debug("greeter waiting for greetd connection", .{});
-            const client_fd = try std.posix.accept(self.server_fd, null, null, 0);
+            const client_fd = acceptGreeterConnection(self.server_fd, child.id, &child_exited) catch |err| switch (err) {
+                error.ShutdownRequested => {
+                    shutdownChild(&child, &child_exited);
+                    return;
+                },
+                else => return err,
+            } orelse return error.GreeterExited;
             defer std.posix.close(client_fd);
 
             log.debug("greeter connected", .{});
@@ -109,7 +133,11 @@ pub const Greeter = struct {
             poll_loop: while (true) {
                 fds[0].revents = 0;
                 fds[1].revents = 0;
-                _ = try std.posix.poll(&fds, -1);
+                _ = try std.posix.poll(&fds, 1000);
+                if (shutdown_requested.load(.seq_cst) != 0) {
+                    shutdownChild(&child, &child_exited);
+                    return;
+                }
 
                 if ((fds[0].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
                     while (true) {
@@ -145,6 +173,10 @@ pub const Greeter = struct {
                             },
                         };
 
+                        if (greeter_state.should_exit) {
+                            break :poll_loop;
+                        }
+
                         if (greeter_reader.interface.end == greeter_reader.interface.seek) break;
                     }
                 }
@@ -179,9 +211,55 @@ pub const Greeter = struct {
                     log.warn("zgsld poll error", .{});
                 }
             }
+
+            if (greeter_state.should_exit) {
+                log.debug("start_session handled; waiting for greeter to exit", .{});
+                if (!child_exited) {
+                    const res = std.posix.waitpid(child.id, 0);
+                    child_exited = true;
+                    logChildExit(res.status);
+                }
+                return;
+            }
         }
     }
 };
+
+fn installSignalHandlers() void {
+    const sigact = std.posix.Sigaction{
+        .handler = .{ .handler = forwardSignalToChild },
+        .mask = std.posix.sigemptyset(),
+        .flags = 0,
+    };
+
+    const forward_signals = [_]u8{
+        std.posix.SIG.TERM,
+        std.posix.SIG.INT,
+        std.posix.SIG.HUP,
+        std.posix.SIG.QUIT,
+    };
+
+    for (forward_signals) |sig| {
+        std.posix.sigaction(sig, &sigact, null);
+    }
+}
+
+fn forwardSignalToChild(sig: i32) callconv(.c) void {
+    shutdown_requested.store(1, .seq_cst);
+    const sig_u8: u8 = @intCast(sig);
+    const child_pid = active_child_pid.load(.seq_cst);
+    if (child_pid > 0) {
+        std.posix.kill(child_pid, sig_u8) catch {};
+    }
+}
+
+fn shutdownChild(child: *std.process.Child, child_exited: *bool) void {
+    if (child_exited.*) return;
+    std.posix.kill(child.id, std.posix.SIG.TERM) catch {};
+    const res = std.posix.waitpid(child.id, 0);
+    child_exited.* = true;
+    logChildExit(res.status);
+}
 
 fn parseGreeterArgs(allocator: std.mem.Allocator, command: []const u8) ![]const []const u8 {
     var args_list = std.ArrayList([]const u8){};
@@ -214,7 +292,7 @@ fn freeGreeterArgs(self: *Greeter) void {
 fn handleGreetdRequest(
     allocator: std.mem.Allocator,
     payload: []const u8,
-    zgsld_ipc: *zgsld.Ipc,
+    zgsld_ipc: *zgipc.Ipc,
     greeter_io_writer: *std.Io.Writer,
     greeter_state: *GreeterState,
     source_profile: bool,
@@ -223,7 +301,6 @@ fn handleGreetdRequest(
     defer req_arena.deinit();
     const req = try greetd.parseGreetdRequest(req_arena.allocator(), payload);
     log.debug("greetd -> compat: {s}", .{@tagName(req)});
-    log.debug("greetd greeter payload: {s}", .{payload});
 
     switch (req) {
         .post_auth_message_response => {
@@ -239,8 +316,13 @@ fn handleGreetdRequest(
             }
             greeter_state.awaiting_response = false;
         },
-        .create_session, .cancel_session, .start_session => {
+        .create_session, .cancel_session => {
             greeter_state.awaiting_response = false;
+        },
+        .start_session => {
+            greeter_state.awaiting_response = false;
+            greeter_state.should_exit = true;
+            log.debug("start_session received; will exit after greeter exits", .{});
         },
     }
 
@@ -249,8 +331,57 @@ fn handleGreetdRequest(
         .source_profile = source_profile,
     });
     log.debug("compat wrote {s}", .{@tagName(req)});
+
+    if (req == .start_session) {
+        try greetd.writeResponse(greeter_io_writer, allocator, .success);
+    }
 }
 
 const GreeterState = struct {
     awaiting_response: bool = false,
+    should_exit: bool = false,
 };
+
+fn acceptGreeterConnection(
+    server_fd: std.posix.fd_t,
+    child_pid: std.process.Child.Id,
+    child_exited: *bool,
+) !?std.posix.fd_t {
+    var fds = [_]std.posix.pollfd{
+        .{ .fd = server_fd, .events = std.posix.POLL.IN, .revents = 0 },
+    };
+
+    while (true) {
+        if (shutdown_requested.load(.seq_cst) != 0) {
+            return error.ShutdownRequested;
+        }
+        fds[0].revents = 0;
+        const ready = try std.posix.poll(&fds, 1000);
+        if (ready == 0) {
+            if (try childExited(child_pid, child_exited)) return null;
+            continue;
+        }
+        if ((fds[0].revents & (std.posix.POLL.IN | std.posix.POLL.HUP | std.posix.POLL.ERR)) != 0) {
+            return try std.posix.accept(server_fd, null, null, 0);
+        }
+    }
+}
+
+fn childExited(child_pid: std.process.Child.Id, child_exited: *bool) !bool {
+    const res = std.posix.waitpid(child_pid, std.posix.W.NOHANG);
+    if (res.pid == 0) return false;
+
+    child_exited.* = true;
+    logChildExit(res.status);
+    return true;
+}
+
+fn logChildExit(status: u32) void {
+    if (std.c.W.IFEXITED(status)) {
+        log.debug("greeter exited with status {d}", .{std.c.W.EXITSTATUS(status)});
+    } else if (std.c.W.IFSIGNALED(status)) {
+        log.debug("greeter exited with signal {d}", .{std.c.W.TERMSIG(status)});
+    } else {
+        log.debug("greeter exited", .{});
+    }
+}
