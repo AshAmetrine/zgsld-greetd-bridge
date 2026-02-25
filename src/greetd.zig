@@ -344,17 +344,12 @@ fn authMessageTypeToString(msg_type: AuthMessageType) []const u8 {
 }
 
 fn sendJson(writer: *std.Io.Writer, allocator: std.mem.Allocator, value: anytype) !void {
-    var buf = std.ArrayList(u8){};
-    defer buf.deinit(allocator);
+    var buf: std.Io.Writer.Allocating = .init(allocator);
+    defer buf.deinit();
 
-    var buf_writer = buf.writer(allocator);
-    var adapter_buf: [256]u8 = undefined;
-    var adapter = buf_writer.adaptToNewApi(&adapter_buf);
-    var jw = std.json.Stringify{ .writer = &adapter.new_interface, .options = .{} };
+    var jw = std.json.Stringify{ .writer = &buf.writer, .options = .{} };
     try jw.write(value);
-    try adapter.new_interface.flush();
-
-    const payload = buf.items;
+    const payload = buf.written();
     try writer.writeInt(u32, @intCast(payload.len), native_endian);
     try writer.writeAll(payload);
     try writer.flush();
