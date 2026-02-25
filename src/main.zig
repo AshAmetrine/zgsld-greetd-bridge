@@ -24,7 +24,7 @@ pub fn main() !void {
 
     zgsld.initZgsldLog();
 
-    const app = zgsld.Zgsld.init(allocator, .{
+    const app = zgsld.Zgsld.init(allocator, &.{
         .run = run,
         .configure = configure,
     });
