@@ -3,7 +3,7 @@ const zgsld = @import("zgsld");
 const Greeter = @import("greeter.zig").Greeter;
 const clap = @import("clap");
 const build_options = @import("build_options");
-const greetd = @import("greetd.zig");
+const greetd_config = @import("greetd/config.zig");
 
 pub const std_options: std.Options = .{ .logFn = zgsld.logFn };
 
@@ -129,16 +129,16 @@ fn parseArgs(allocator: std.mem.Allocator, argv: []const [:0]const u8) !ParsedAr
     }
 
     const config_path = res.args.config orelse "/etc/greetd/config.toml";
-    const config = try greetd.parseConfig(allocator, config_path);
+    const config = try greetd_config.Config.parseFromFile(allocator, config_path);
 
     const greeter_session = config.value.default_session;
 
     if (build_options.standalone) {
         const vt_selection = if (res.args.vt) |vt| blk: {
-            break :blk try greetd.parseVtArg(vt);
+            break :blk try greetd_config.parseVtArg(vt);
         } else config.value.terminal.vt;
 
-        const vt = try greetd.resolveVt(vt_selection);
+        const vt = try greetd_config.resolveVt(vt_selection);
 
         return .{
             .arena = config.arena,
