@@ -27,7 +27,6 @@ pub const Greeter = struct {
         greeter_cmd: []const u8,
         source_profile: bool,
     ) !Greeter {
-        log.debug("greeter init start", .{});
         const runtime_dir = std.posix.getenv("XDG_RUNTIME_DIR") orelse return error.NoXdgRuntimeDir;
 
         var greeter: Greeter = .{
@@ -49,30 +48,19 @@ pub const Greeter = struct {
         std.fs.cwd().deleteFile(greeter.sock_path) catch {};
         errdefer std.fs.cwd().deleteFile(greeter.sock_path) catch {};
 
-        const server_fd = try std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0);
-        errdefer std.posix.close(server_fd);
-
-        const addr = try std.net.Address.initUnix(greeter.sock_path);
-        try std.posix.bind(server_fd, &addr.any, addr.getOsSockLen());
-        try std.posix.listen(server_fd, 1);
-
-        greeter.server_fd = server_fd;
+        greeter.server_fd = try listenOnSocket(greeter.sock_path);
         greeter.zgsld_reader = greeter.zgsld_ipc.reader(&greeter.zgsld_rbuf);
-
-        log.debug("greeter init end", .{});
 
         return greeter;
     }
 
     pub fn deinit(self: *Greeter) void {
-        log.debug("greeter deinit start", .{});
         std.posix.close(self.server_fd);
         freeGreeterArgs(self);
         if (self.sock_path.len != 0) std.fs.cwd().deleteFile(self.sock_path) catch {};
     }
 
     pub fn run(self: *Greeter) !void {
-        log.debug("greeter run start", .{});
         const greeter_args = self.greeter_args;
         if (greeter_args.len == 0) return error.MissingGreeterCommand;
 
@@ -287,6 +275,16 @@ fn freeGreeterArgs(self: *Greeter) void {
     for (self.greeter_args) |arg| self.allocator.free(arg);
     self.allocator.free(self.greeter_args);
     self.greeter_args = &[_][]const u8{};
+}
+
+fn listenOnSocket(sock_path: []const u8) !std.posix.fd_t {
+    const server_fd = try std.posix.socket(std.posix.AF.UNIX, std.posix.SOCK.STREAM, 0);
+    errdefer std.posix.close(server_fd);
+
+    const addr = try std.net.Address.initUnix(sock_path);
+    try std.posix.bind(server_fd, &addr.any, addr.getOsSockLen());
+    try std.posix.listen(server_fd, 1);
+    return server_fd;
 }
 
 fn handleGreetdRequest(
