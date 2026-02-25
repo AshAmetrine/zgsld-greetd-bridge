@@ -61,26 +61,15 @@ pub const Greeter = struct {
     }
 
     pub fn run(self: *Greeter) !void {
-        const greeter_args = self.greeter_args;
-        if (greeter_args.len == 0) return error.MissingGreeterCommand;
+        if (self.greeter_args.len == 0) return error.MissingGreeterCommand;
 
         installSignalHandlers();
 
         var env_map = try std.process.getEnvMap(self.allocator);
         defer env_map.deinit();
-        try env_map.put("GREETD_SOCK", self.sock_path);
-
-        var child = std.process.Child.init(greeter_args, self.allocator);
-        child.env_map = &env_map;
-        child.stdin_behavior = .Inherit;
-        child.stdout_behavior = .Inherit;
-        child.stderr_behavior = .Inherit;
-        try child.spawn();
+        var child = try spawnGreeterChild(self, &env_map);
         active_child_pid.store(child.id, .seq_cst);
         defer active_child_pid.store(0, .seq_cst);
-        if (shutdown_requested.load(.seq_cst) != 0) {
-            std.posix.kill(child.id, std.posix.SIG.TERM) catch {};
-        }
         var child_exited = false;
         defer {
             if (!child_exited) _ = child.wait() catch {};
@@ -285,6 +274,22 @@ fn listenOnSocket(sock_path: []const u8) !std.posix.fd_t {
     try std.posix.bind(server_fd, &addr.any, addr.getOsSockLen());
     try std.posix.listen(server_fd, 1);
     return server_fd;
+}
+
+fn spawnGreeterChild(self: *Greeter, env_map: *std.process.EnvMap) !std.process.Child {
+    try env_map.put("GREETD_SOCK", self.sock_path);
+
+    var child = std.process.Child.init(self.greeter_args, self.allocator);
+    child.env_map = env_map;
+    child.stdin_behavior = .Inherit;
+    child.stdout_behavior = .Inherit;
+    child.stderr_behavior = .Inherit;
+    try child.spawn();
+    if (shutdown_requested.load(.seq_cst) != 0) {
+        std.posix.kill(child.id, std.posix.SIG.TERM) catch {};
+    }
+
+    return child;
 }
 
 fn handleGreetdRequest(
