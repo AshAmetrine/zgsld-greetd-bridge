@@ -1,5 +1,5 @@
 const std = @import("std");
-const ipc = @import("zgsld").ipc;
+const Ipc = @import("zgsld").Ipc;
 const builtin = @import("builtin");
 
 const native_endian = builtin.cpu.arch.endian();
@@ -73,7 +73,7 @@ pub fn parseGreetdRequest(arena: std.mem.Allocator, payload: []const u8) !Greetd
 }
 
 // PAM REQUEST -> GreetdResponse
-pub fn zgsldRequestToGreetd(ipc_event: ipc.IpcEvent) GreetdResponse {
+pub fn zgsldRequestToGreetd(ipc_event: Ipc.Event) GreetdResponse {
     switch (ipc_event) {
         .pam_request => |r| {
             const msg_type: AuthMessageType = if (r.echo) .visible else .secret;
@@ -112,8 +112,8 @@ pub const ZgsldWriteOpts = struct {
 };
 
 // GreetdRequest -> Zgsld
-pub fn writeGreetdRequestToZgsld(ipc_conn: *ipc.Ipc, greetd_req: GreetdRequest, opts: ZgsldWriteOpts) !void {
-    var buf: [ipc.IPC_IO_BUF_SIZE]u8 = undefined;
+pub fn writeGreetdRequestToZgsld(ipc_conn: *Ipc.Connection, greetd_req: GreetdRequest, opts: ZgsldWriteOpts) !void {
+    var buf: [Ipc.event_buf_size]u8 = undefined;
     var writer = ipc_conn.writer(&buf);
     var ipc_w = &writer.interface;
 
@@ -121,22 +121,22 @@ pub fn writeGreetdRequestToZgsld(ipc_conn: *ipc.Ipc, greetd_req: GreetdRequest, 
 
     switch (greetd_req) {
         .create_session => |r| {
-            var user_buf: [ipc.PAM_START_BUF_SIZE]u8 = undefined;
+            var user_buf: [64]u8 = undefined;
             const user_z = try std.fmt.bufPrintZ(&user_buf, "{s}", .{r.username});
-            const ev = ipc.IpcEvent{
+            const ev = Ipc.Event{
                 .pam_start_auth = .{ .user = user_z },
             };
             log.debug("compat pam_start_auth len={d}", .{user_z.len});
             try ipc_conn.writeEvent(ipc_w, &ev);
         },
         .post_auth_message_response => |r| {
-            const ev = ipc.IpcEvent{
+            const ev = Ipc.Event{
                 .pam_response = r.response orelse "",
             };
             try ipc_conn.writeEvent(ipc_w, &ev);
         },
         .cancel_session => {
-            const ev = ipc.IpcEvent{ .login_cancel = {} };
+            const ev = Ipc.Event{ .login_cancel = {} };
             try ipc_conn.writeEvent(ipc_w, &ev);
         },
         .start_session => |r| {
@@ -144,7 +144,7 @@ pub fn writeGreetdRequestToZgsld(ipc_conn: *ipc.Ipc, greetd_req: GreetdRequest, 
                 const eq = std.mem.indexOfScalar(u8, kv, '=') orelse continue;
                 if (eq == 0) continue;
 
-                const ev = ipc.IpcEvent{
+                const ev = Ipc.Event{
                     .set_session_env = .{
                         .key = kv[0..eq],
                         .value = kv[eq + 1 ..],
@@ -153,7 +153,7 @@ pub fn writeGreetdRequestToZgsld(ipc_conn: *ipc.Ipc, greetd_req: GreetdRequest, 
                 try ipc_conn.writeEvent(ipc_w, &ev);
             }
 
-            var cmd_buf: [ipc.IPC_IO_BUF_SIZE]u8 = undefined;
+            var cmd_buf: [Ipc.event_buf_size]u8 = undefined;
             var cmd_writer: std.Io.Writer = .fixed(&cmd_buf);
             for (r.cmd, 0..) |arg, i| {
                 if (i != 0) try cmd_writer.writeByte(' ');
@@ -163,7 +163,7 @@ pub fn writeGreetdRequestToZgsld(ipc_conn: *ipc.Ipc, greetd_req: GreetdRequest, 
             const cmd_str = cmd_writer.buffered();
             if (cmd_str.len == 0) return error.InvalidPayload;
 
-            const ev = ipc.IpcEvent{
+            const ev = Ipc.Event{
                 .start_session = .{
                     .session_type = .Command,
                     .command = .{ .session_cmd = cmd_str, .source_profile = opts.source_profile },

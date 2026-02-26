@@ -1,5 +1,6 @@
 const std = @import("std");
 const zgsld = @import("zgsld");
+const Zgsld = zgsld.Zgsld;
 const Greeter = @import("greeter.zig").Greeter;
 const clap = @import("clap");
 const build_options = @import("build_options");
@@ -32,7 +33,7 @@ pub fn main() !void {
     try app.run();
 }
 
-pub fn configure(ctx: zgsld.ConfigureContext) !void {
+pub fn configure(ctx: Zgsld.ConfigureContext) !void {
     if (!build_options.standalone) unreachable;
 
     const argv = try std.process.argsAlloc(ctx.allocator);
@@ -41,12 +42,13 @@ pub fn configure(ctx: zgsld.ConfigureContext) !void {
     var config = try parseArgs(ctx.allocator, argv);
     defer config.deinit();
 
-    if (config.vt) |vt| ctx.cfg.setVt(vt);
-    if (config.greeter_user) |u| try ctx.cfg.setGreeterUser(u);
-    if (config.pam_user_service) |p| try ctx.cfg.setServiceName(p);
+    if (config.vt) |vt| ctx.config.vt = vt;
+    if (config.greeter_user) |u| ctx.config.greeter_user = try ctx.arena_allocator.dupe(u8, u);
+    if (config.pam_user_service) |p| ctx.config.service_name = try ctx.arena_allocator.dupe(u8, p);
+    if (config.pam_greeter_service) |p| ctx.config.greeter_service_name = try ctx.arena_allocator.dupe(u8, p);
 }
 
-pub fn run(ctx: zgsld.GreeterContext) !void {
+pub fn run(ctx: Zgsld.GreeterContext) !void {
     const argv = try std.process.argsAlloc(ctx.allocator);
     defer std.process.argsFree(ctx.allocator, argv);
 

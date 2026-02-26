@@ -1,6 +1,6 @@
 const std = @import("std");
 const zgsld = @import("zgsld");
-const zgipc = zgsld.ipc;
+const Ipc = zgsld.Ipc;
 const greetd = @import("greetd.zig");
 
 const log = std.log.scoped(.greetd_bridge);
@@ -10,20 +10,20 @@ var active_child_pid = std.atomic.Value(std.posix.pid_t).init(0);
 
 pub const Greeter = struct {
     allocator: std.mem.Allocator,
-    zgsld_ipc: *zgipc.Ipc,
+    zgsld_ipc: *Ipc.Connection,
     server_fd: std.posix.fd_t,
     source_profile: bool = true,
     greeter_args: []const []const u8 = &[_][]const u8{},
     sock_path_buf: [std.fs.max_path_bytes]u8 = undefined,
     sock_path: []const u8 = "",
 
-    zgsld_rbuf: [zgipc.IPC_IO_BUF_SIZE]u8 = undefined,
-    zgsld_event_buf: [zgipc.GREETER_BUF_SIZE]u8 = undefined,
+    zgsld_rbuf: [Ipc.event_buf_size]u8 = undefined,
+    zgsld_event_buf: [Ipc.event_buf_size]u8 = undefined,
     zgsld_reader: std.fs.File.Reader = undefined,
 
     pub fn init(
         allocator: std.mem.Allocator,
-        ipc_conn: *zgipc.Ipc,
+        ipc_conn: *Ipc.Connection,
         greeter_cmd: []const u8,
         source_profile: bool,
     ) !Greeter {
@@ -295,7 +295,7 @@ fn spawnGreeterChild(self: *Greeter, env_map: *std.process.EnvMap) !std.process.
 fn handleGreetdRequest(
     allocator: std.mem.Allocator,
     payload: []const u8,
-    zgsld_ipc: *zgipc.Ipc,
+    zgsld_ipc: *Ipc.Connection,
     greeter_io_writer: *std.Io.Writer,
     greeter_state: *GreeterState,
     source_profile: bool,
