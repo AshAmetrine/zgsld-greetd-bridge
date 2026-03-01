@@ -165,7 +165,7 @@ pub fn writeGreetdRequestToZgsld(ipc_conn: *Ipc.Connection, greetd_req: GreetdRe
 
             const ev = Ipc.Event{
                 .start_session = .{
-                    .session_type = .Command,
+                    .session_type = .command,
                     .command = .{ .session_cmd = cmd_str, .source_profile = opts.source_profile },
                 },
             };
