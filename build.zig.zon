@@ -7,7 +7,7 @@
         .zgsld = .{ .path = "../zgsld" },
         .clap = .{
             .url = "https://github.com/Hejsil/zig-clap/archive/refs/tags/0.11.0.tar.gz",
-            .hash = "1220cf08a633c05eeb3b7a8317045c0f7f50d0300b9534b3e47ede19c033780ef824",
+            .hash = "clap-0.11.0-oBajB-HnAQDPCKYzwF7rO3qDFwRcD39Q0DALlTSz5H7e",
         },
         .toml = .{
             .url = "git+https://github.com/sam701/zig-toml?ref=zig-0.15#475b03c630c802f8b6bd3e239d8fc2279b4fadb8",
