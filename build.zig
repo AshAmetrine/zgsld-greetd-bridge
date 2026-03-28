@@ -6,6 +6,7 @@ pub fn build(b: *std.Build) !void {
     const optimize = b.standardOptimizeOption(.{});
 
     const standalone = b.option(bool, "standalone", "Build standalone greeter + session manager") orelse false;
+    const preview = b.option(bool, "preview", "Preview build") orelse false;
 
     const zgsld = b.dependency("zgsld", .{ .target = target, .optimize = optimize, .standalone = standalone, .x11 = false });
     const clap = b.dependency("clap", .{ .target = target, .optimize = optimize });
@@ -17,6 +18,7 @@ pub fn build(b: *std.Build) !void {
     const build_options = b.addOptions();
     build_options.addOption([]const u8, "version", version_str);
     build_options.addOption(bool, "standalone", standalone);
+    build_options.addOption(bool, "preview", preview);
 
     const exe_name = if (standalone) "greetd" else "zgsld-greetd-bridge";
     const exe = b.addExecutable(.{

@@ -8,6 +8,8 @@ const greetd_config = @import("greetd/config.zig");
 
 pub const std_options: std.Options = .{ .logFn = zgsld.logFn };
 
+const log = std.log.scoped(.greetd_bridge);
+
 pub fn main() !void {
     const allocator = std.heap.c_allocator;
 
@@ -18,9 +20,10 @@ pub fn main() !void {
         var config = try parseArgs(allocator, argv);
         defer config.deinit();
 
-        std.debug.print("Error: This greeter should be run by zgsld\n", .{});
-
-        return;
+        if (!build_options.preview) {
+            log.err("This greeter should be run by zgsld", .{});
+            return;
+        }
     }
 
     zgsld.initZgsldLog();
@@ -30,7 +33,14 @@ pub fn main() !void {
         .configure = configure,
     });
 
-    try app.run();
+    if (build_options.preview) {
+        try app.runPreview(.{
+            .authenticate_steps = &zgsld.preview.password_auth_steps,
+            .post_auth_steps = &zgsld.preview.change_auth_token_steps,
+        });
+    } else {
+        try app.run();
+    }
 }
 
 pub fn configure(ctx: Zgsld.ConfigureContext) !void {
