@@ -130,8 +130,9 @@ pub fn writeGreetdRequestToZgsld(ipc_conn: *Ipc.Connection, greetd_req: GreetdRe
             try ipc_conn.writeEvent(ipc_w, &ev);
         },
         .post_auth_message_response => |r| {
+            if (r.response == null) return;
             const ev = Ipc.Event{
-                .pam_response = r.response orelse "",
+                .pam_response = r.response.?,
             };
             try ipc_conn.writeEvent(ipc_w, &ev);
         },

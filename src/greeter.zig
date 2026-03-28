@@ -306,7 +306,11 @@ fn handleGreetdRequest(
     log.debug("greetd -> compat: {s}", .{@tagName(req)});
 
     switch (req) {
-        .post_auth_message_response => {
+        .post_auth_message_response => |r| {
+            // greeters send responses to info/error messages
+            // we can ignore them.
+            if (r.response == null) return;
+
             if (!greeter_state.awaiting_response) {
                 log.err("dropping post_auth_message_response: no pending pam_request", .{});
                 greetd.writeResponse(greeter_io_writer, allocator, .{
