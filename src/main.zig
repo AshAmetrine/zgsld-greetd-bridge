@@ -43,9 +43,9 @@ pub fn configure(ctx: Zgsld.ConfigureContext) !void {
     defer config.deinit();
 
     if (config.vt) |vt| ctx.config.vt = vt;
-    if (config.greeter_user) |u| ctx.config.greeter_user = try ctx.arena_allocator.dupe(u8, u);
-    if (config.pam_user_service) |p| ctx.config.service_name = try ctx.arena_allocator.dupe(u8, p);
-    if (config.pam_greeter_service) |p| ctx.config.greeter_service_name = try ctx.arena_allocator.dupe(u8, p);
+    if (config.greeter_user) |u| ctx.config.greeter.user = try ctx.arena_allocator.dupe(u8, u);
+    if (config.pam_greeter_service) |p| ctx.config.greeter.service_name = try ctx.arena_allocator.dupe(u8, p);
+    if (config.pam_user_service) |p| ctx.config.session.service_name = try ctx.arena_allocator.dupe(u8, p);
 }
 
 pub fn run(ctx: Zgsld.GreeterContext) !void {
