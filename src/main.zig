@@ -56,6 +56,10 @@ pub fn configure(ctx: Zgsld.ConfigureContext) !void {
     if (config.greeter_user) |u| ctx.config.greeter.user = try ctx.arena_allocator.dupe(u8, u);
     if (config.pam_greeter_service) |p| ctx.config.greeter.service_name = try ctx.arena_allocator.dupe(u8, p);
     if (config.pam_user_service) |p| ctx.config.session.service_name = try ctx.arena_allocator.dupe(u8, p);
+    if (config.autologin) |autologin| {
+        ctx.config.autologin.user = try ctx.arena_allocator.dupeZ(u8, autologin.user);
+        ctx.config.autologin.command = try ctx.arena_allocator.dupeZ(u8, autologin.command);
+    }
 }
 
 pub fn run(ctx: Zgsld.GreeterContext) !void {
@@ -81,6 +85,7 @@ const ParsedArgs = if (build_options.standalone) struct {
     greeter_user: ?[]const u8 = null,
     pam_user_service: ?[]const u8 = null,
     pam_greeter_service: ?[]const u8 = null,
+    autologin: ?AutologinConfig = null,
     greeter_cmd: []const u8,
     source_profile: bool = true,
 
@@ -95,6 +100,11 @@ const ParsedArgs = if (build_options.standalone) struct {
     pub fn deinit(self: *ParsedArgs) void {
         self.arena.deinit();
     }
+};
+
+const AutologinConfig = struct {
+    command: []const u8,
+    user: []const u8,
 };
 
 fn parseArgs(allocator: std.mem.Allocator, argv: []const [:0]const u8) !ParsedArgs {
@@ -158,6 +168,10 @@ fn parseArgs(allocator: std.mem.Allocator, argv: []const [:0]const u8) !ParsedAr
             .greeter_user = greeter_session.user,
             .pam_user_service = config.value.general.service,
             .pam_greeter_service = config.value.default_session.service,
+            .autologin = if (config.value.initial_session) |autologin| .{
+                .command = autologin.command,
+                .user = autologin.user,
+            } else null,
             .greeter_cmd = greeter_session.command,
             .source_profile = config.value.general.source_profile,
         };
