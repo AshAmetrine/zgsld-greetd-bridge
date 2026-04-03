@@ -1,6 +1,7 @@
 const std = @import("std");
 const toml = @import("toml");
 const vt = @import("vt.zig");
+const ZgsldVt = @import("zgsld").Zgsld.Config.Vt;
 
 const GreetdVtOpts = enum {
     num,
@@ -93,12 +94,12 @@ pub fn parseVtArg(value: []const u8) !GreetdVt {
     return .{ .num = vt_num };
 }
 
-pub fn resolveVt(value: GreetdVt) !?u8 {
+pub fn resolveVt(value: GreetdVt) !ZgsldVt {
     return switch (value) {
-        .num => |vt_num| vt_num,
-        .current => null,
-        .next => try vt.findNextVt(),
-        .none => null,
+        .num => |vt_num| .{ .number = vt_num },
+        .current => .current,
+        .next => .{ .number = try vt.findNextVt() },
+        .none => .unmanaged,
     };
 }
 

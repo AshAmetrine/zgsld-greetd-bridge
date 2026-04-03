@@ -81,7 +81,7 @@ pub fn run(ctx: Zgsld.GreeterContext) !void {
 
 const ParsedArgs = if (build_options.standalone) struct {
     arena: std.heap.ArenaAllocator,
-    vt: ?u8 = null,
+    vt: ?Zgsld.Config.Vt = null,
     greeter_user: ?[]const u8 = null,
     pam_user_service: ?[]const u8 = null,
     pam_greeter_service: ?[]const u8 = null,
