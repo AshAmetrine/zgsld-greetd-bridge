@@ -4,7 +4,6 @@
     .fingerprint = 0x90d318930cc2f3b0,
     .minimum_zig_version = "0.15.2",
     .dependencies = .{
-        .zgsld = .{ .path = "../zgsld" },
         .clap = .{
             .url = "https://github.com/Hejsil/zig-clap/archive/refs/tags/0.11.0.tar.gz",
             .hash = "clap-0.11.0-oBajB-HnAQDPCKYzwF7rO3qDFwRcD39Q0DALlTSz5H7e",
@@ -12,6 +11,10 @@
         .toml = .{
             .url = "git+https://github.com/sam701/zig-toml?ref=zig-0.15#475b03c630c802f8b6bd3e239d8fc2279b4fadb8",
             .hash = "toml-0.3.0-bV14BfV7AQD8DkuQI7skP8ekQTaBYKTO0MY_35Cw_EXo",
+        },
+        .zgsld = .{
+            .url = "git+https://github.com/ashametrine/zgsld#130d83772a129bb2ce6e662240fd09a0bb8060aa",
+            .hash = "zgsld-0.1.0-Q_79asXKAQBUxjeKw_K0CcgLCrFrcuDi0VQvxqRAFC1S",
         },
     },
     .paths = .{
