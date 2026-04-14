@@ -1,7 +1,7 @@
 const std = @import("std");
 const toml = @import("toml");
 const vt = @import("vt.zig");
-const ZgsldVt = @import("zgsld").Zgsld.Config.Vt;
+const ZgsldVt = @import("zgsld").Config.Vt;
 
 const GreetdVtOpts = enum {
     num,
